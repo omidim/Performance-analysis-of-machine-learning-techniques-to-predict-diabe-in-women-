@@ -1,0 +1,420 @@
+---
+title: "Fitting the models"
+author: "Meisam Omidi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+## Load packages
+library(leaps)
+library(corrplot)
+library(devtools)
+library(VIM)
+library(pscl)
+library(ResourceSelection)
+library(HH)
+library(pscl)
+library(ggplot2)
+library(gridExtra)
+library(scales)
+library(tidyr)
+library(dplyr)
+library(readr)
+library(ggformula)
+library(imputeMissings)
+library(DMwR2)
+library(see)
+library(imputeMissings)
+library(gapminder)
+library(caret)
+library(rpart) 
+library(rattle)
+```
+
+## Load data
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+diabetes <- read.csv("diabetes.csv", header=TRUE, sep=",", stringsAsFactors = FALSE)
+diabetes_0 <-diabetes
+
+summary(diabetes)
+ 
+```
+
+## Preparing and Cleaning the Data
+
+              
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+ # to substitute missing data with NA
+diabetes_0 <- mutate(diabetes_0, Glucose = ifelse(Glucose == 0, NA, Glucose), BloodPressure = ifelse(BloodPressure == 0, NA, BloodPressure), SkinThickness = ifelse(SkinThickness == 0, NA, SkinThickness), Insulin = ifelse(Insulin == 0, NA, Insulin), BMI = ifelse(BMI == 0, NA, BMI), Age = ifelse(Age == 0, NA, Age))
+
+diab_0 <- diabetes_0
+diab_0 %>%
+  gf_histogram(~Pregnancies)
+diab_0 %>%
+  gf_histogram(~BMI)   
+diab_0 %>%
+  gf_histogram(~DiabetesPedigreeFunction)
+diab_0 %>%
+  gf_histogram(~Age)   
+
+#     The logarithm transformation 
+
+diab_0$Pregnancies  <- log10(diab_0$Pregnancies+1)
+diab_0$BMI  <- log10(diab_0$BMI)
+diab_0$DiabetesPedigreeFunction  <- log10(diab_0$DiabetesPedigreeFunction)
+diab_0$Age  <- log10(diab_0$Age)
+
+```
+#Fitting the models
+
+```{r}
+
+
+#Create a new data frame using KNN imputation to fill in the missing values
+
+diabetes_2 = knnImputation(diab_0)
+
+#Create model
+model_1 = (Outcome~BloodPressure+	BMI+Glucose+Pregnancies+DiabetesPedigreeFunction+Age)
+model_2 = (Outcome~BloodPressure+	BMI+Glucose+DiabetesPedigreeFunction)
+model_3 = (Outcome~Age+Glucose+DiabetesPedigreeFunction)
+
+
+set.seed(789)
+
+diab_0$Outcome <- as.factor(diab_0$Outcome)
+diabetes_2$Outcome <- as.factor(diabetes_2$Outcome)
+
+ctrl = trainControl(method = "cv", number = 10)
+
+
+fit_tree = train(Outcome~., 
+             data = diab_0,
+             method = "rpart",
+             na.action = na.exclude,
+             tuneGrid = expand.grid(cp = seq(0, .35, by = .01)),
+             trControl = ctrl)
+
+fit_tree 
+fancyRpartPlot(fit_tree$finalModel)
+plot(fit_tree)
+
+y = diabetes_2$Outcome
+p <- predict(fit_tree$finalModel,diabetes_2, type = "class")
+confusionMatrix(p,y)
+CVError = sum(p!=y)/length(p); CVError
+
+#fit_tree$finalModel
+qda.model = train(Outcome~.,
+                  data= diab_0,
+                  method = "qda",
+                  na.action = na.exclude,
+                  trControl = ctrl)
+
+qda.model
+y=diabetes_2$Outcome
+p1 <- predict(qda.model, diabetes_2) 
+confusionMatrix(p1,y)
+CVError1 = sum(p1!=y)/length(p1); CVError1
+qda.model$coefnames
+
+
+#fit_tree$finalModel
+qda.model2 = train(model_1,
+                  data= diab_0,
+                  method = "qda",
+                  na.action = na.exclude,
+                  trControl = ctrl)
+
+qda.model2
+p2 <- predict(qda.model2, diabetes_2) 
+confusionMatrix(p2,y)
+CVError2 = sum(p2!=y)/length(p2); CVError2
+
+qda.model2$coefnames
+
+
+#fit_tree$finalModel
+qda.model3 = train(model_2,
+                  data= diab_0,
+                  method = "qda",
+                  na.action = na.exclude,
+                  trControl = ctrl)
+
+qda.model2
+p3 <- predict(qda.model3, diabetes_2) 
+confusionMatrix(p3,y)
+CVError3 = sum(p3!=y)/length(p3); CVError3
+
+qda.model3$coefnames
+
+
+# all best models
+  all_best_Types = c("Single decision tree","QDA","QDA","QDA")
+  all_best_Pars = list(fit_tree$bestTune, 8,6,4 )
+  all_best_Models = list(fit_tree$finalModel,qda.model,qda.model2,qda.model3)
+  all_best_Accuracy = c(max(fit_tree$results$Accuracy),qda.model$results$Accuracy,
+                        qda.model2$results$Accuracy,qda.model3$results$Accuracy)
+  ############# compare all models - visual understanding #############
+  # model counts and types
+  mtree = length(seq(0, .35, by = .01)); 
+  mmodels = 3+mtree
+  modelMethod = c(rep("QDA",1),rep("QDA",1),rep("QDA",1),rep("Single decision tree",mtree))
+  all_caret_Accuracy = c(qda.model$results$Accuracy,
+                        qda.model2$results$Accuracy,qda.model3$results$Accuracy,
+                   fit_tree$results$Accuracy)
+  coloptions = rainbow(4)
+  colused = coloptions[as.numeric(factor(modelMethod))+1]
+  charused = 5*(as.numeric(factor(modelMethod)))
+  plot(1:mmodels,all_caret_Accuracy,col=colused,pch=charused,
+     xlab = "Model label",ylab = "Accuracy")
+  order.min = c(1,2,3,3+which.max(fit_tree$results$Accuracy))
+  abline(v=order.min,lwd=2)
+  abline(v=order.min[2],col="red",lwd=2)
+
+
+
+```
+
+```{r}
+
+Model = c("Single decision tree","QDA-1","QDA-2","QDA-3")
+Accuracy  = c(max(fit_tree$results$Accuracy),qda.model$results$Accuracy,
+                        qda.model2$results$Accuracy,qda.model3$results$Accuracy)
+Kappa  = c(max(fit_tree$results$Kappa),qda.model$results$Kappa,
+                        qda.model2$results$Kappa,qda.model3$results$Kappa)
+
+gf_col(Accuracy  ~Model )  %>%   
+  gf_labs(x = "",  
+    y = "P_valid")
+gf_col(Kappa  ~Model ) 
+library(pROC)
+
+pp <- predict(fit_tree$finalModel,diabetes_2, type = "prob")[,1]
+  #predict(fit_tree, diabetes_2,s=0.03, type = "prob")
+pp1 <- predict(qda.model, diabetes_2, type = "prob") 
+pp2 <- predict(qda.model2, diabetes_2, type = 'prob') 
+pp3 <- predict(qda.model3, diabetes_2, type = 'prob') 
+
+myroc = roc(response=diabetes_2$Outcome, predictor=pp); auc(myroc)
+myroc1 = roc(response=diabetes_2$Outcome, predictor=pp1$`0`); auc(myroc1)
+myroc2 = roc(response=diabetes_2$Outcome, predictor=pp2$`0`); auc(myroc2)
+myroc3 = roc(response=diabetes_2$Outcome, predictor=pp3$`0`); auc(myroc3)
+
+plot.roc(myroc)
+plot.roc(myroc1, add=T, col="red", lty=2)
+legend("bottomright", legend=c("Single decision tree", "QDA"),lty=c(1,2), col=c("black","red"))
+
+plot.roc(myroc)
+plot.roc(myroc1, add=T, col="red", lty=2)
+plot.roc(myroc2, add=T, col="blue", lty=2)
+plot.roc(myroc3, add=T, col="green", lty=2)
+legend("bottomright", legend=c("Single decision tree", "QDA-1", "QDA-2", "QDA-2"),lty=c(1,4), col=c("black", "red","blue", "green"))
+
+
+AUC_Val  = c(auc(myroc),auc(myroc1), auc(myroc2),auc(myroc3))
+
+gf_col(AUC_Val  ~ Model) 
+```
+
+
+```{r}
+
+
+##### Double cross-validation for modeling-process assessment #####				 
+
+diab_0$Outcome <- as.factor(diab_0$Outcome)
+
+
+##### model assessment OUTER shell #####
+# produce loops for 5-fold cross-validation for model ASSESSMENT
+n = dim(diab_0)[1]
+nfolds = 5
+groups = rep(1:nfolds,length=n)  #produces list of group labels
+set.seed(82)
+cvgroups = sample(groups,n)  #orders randomly
+
+# set up storage for predicted values from the double-cross-validation
+allpredictedCV = factor(rep(NA,n),levels=c("0","1"))
+# set up storage to see what models are "best" on the inner loops
+allbestTypes = rep(NA,nfolds)
+allbestPars = vector("list",nfolds)
+allbestAcc = rep(NA,nfolds)
+
+# loop through outer splits
+for (j in 1:nfolds)  {  #be careful not to re-use loop indices
+  groupj = (cvgroups == j)
+  traindata = diab_0[!groupj,]
+  trainx = model.matrix(Outcome~., data = traindata)[,-1]
+  trainy = diab_0$Outcome
+  validdata = diabetes_2[groupj,]
+  validx = model.matrix(Outcome~., data = validdata)[,-1]
+  validy = validdata$Outcome
+  
+
+  
+  #specify data to be used
+  dataused=traindata
+  
+  ###  entire model-fitting process ###
+  ###  on traindata only!!! ###
+  ###	 :	:	:	:	:	:	:   ###
+  # set up training method
+  set.seed(789)
+  training = trainControl(method = "cv", number = 10)
+  # cross-validation of Single decision tree
+
+  fit_tree = train(Outcome ~ ., 
+             data = dataused,
+             method = "rpart",
+             na.action = na.exclude,
+             tuneGrid = expand.grid(cp = seq(0, .3, by = .01)),
+             trControl = training)
+
+
+  # cross-validation of QDA
+  qda.model = train(Outcome ~ .,
+              data= dataused,
+              method = "qda",
+              na.action = na.exclude,
+              trControl = training)
+  
+  
+  qda.model2 = train(model_1,
+                  data= dataused,
+                  method = "qda",
+                  na.action = na.exclude,
+                  trControl = training)
+
+
+  qda.model3 = train(model_2,
+                  data= dataused,
+                  method = "qda",
+                  na.action = na.exclude,
+                  trControl = training)
+  
+  ############# identify selected model to fit to full data #############
+  # all best models
+  all_best_Types = c("Single decision tree","QDA","QDA","QDA")
+  all_best_Pars = list(fit_tree$bestTune, 8,6,4 )
+  all_best_Models = list(fit_tree$finalModel,qda.model,qda.model2,qda.model3)
+  all_best_Accuracy = c(max(fit_tree$results$Accuracy),qda.model$results$Accuracy,
+                        qda.model2$results$Accuracy,qda.model3$results$Accuracy)
+  accu = max(all_best_Accuracy)
+  ############# compare all models - visual understanding #############
+  # model counts and types
+  mtree = length(seq(0, .3, by = .01)); 
+  mmodels = 3+mtree
+  modelMethod = c(rep("QDA",1),rep("QDA",1),rep("QDA",1),rep("Single decision tree",mtree))
+  all_caret_Accuracy = c(qda.model$results$Accuracy,
+                        qda.model2$results$Accuracy,qda.model3$results$Accuracy,
+                   fit_tree$results$Accuracy)
+  coloptions = rainbow(4)
+  colused = coloptions[as.numeric(factor(modelMethod))+1]
+  charused = 5*(as.numeric(factor(modelMethod)))
+  plot(1:mmodels,all_caret_Accuracy,col=colused,pch=charused,
+     xlab = "Model label",ylab = "Accuracy")
+  order.min = c(1,2,3,3+which.max(fit_tree$results$Accuracy))
+  abline(v=order.min,lwd=2)
+  abline(v=order.min[2],col="red",lwd=2)
+
+  one_best_Type = all_best_Types[which.max(all_best_Accuracy)]
+  one_best_Pars = all_best_Pars[which.max(all_best_Accuracy)]
+  one_best_Model = all_best_Models[[which.max(all_best_Accuracy)]]
+
+  ###  :	:	:	:	:	:	:   ###
+  ###  resulting in     ###
+  ###  one_best_Type and one_best_Pars and one_best_Model and one_best_Order  ###
+
+  
+  allbestTypes[j] = one_best_Type
+  allbestPars[[j]] = one_best_Pars
+  allbestAcc[j] = accu
+
+  
+  if (one_best_Type == "QDA"  ) { 
+    allpredictedCV[groupj] = predict(one_best_Model,validdata) 
+  } else if (one_best_Type == "Single decision tree") {  
+    t_cp = one_best_Pars[[1]]$cp
+    allpredictedCV[groupj]  = predict(one_best_Model,validdata,s=t_cp, type = "class")
+  } 
+  
+  
+  
+}
+
+allbestAcc
+
+# for curiosity / consistency, we can see the models that were "best" on each of the inner splits
+allbestTypes
+allbestPars
+# print individually
+for (j in 1:nfolds) {
+  writemodel = paste("The best model at loop", j, 
+                     "is of type", allbestTypes[j],
+                     "with parameter(s)",allbestPars[[j]])
+  print(writemodel, quote = FALSE)
+}
+
+fancyRpartPlot(fit_tree$finalModel)
+
+
+#assessment
+y = diab_0[groupj,]$Outcome
+p <- predict(fit_tree$finalModel,validdata,s=0.24, type = "class")
+Conf=confusionMatrix(p,y)$overall[1];Conf 
+
+
+p <- predict(qda.model,validdata)
+Conf4=confusionMatrix(p,y)$overall[1];Conf4
+
+
+y1 = diab_0$Outcome
+Conf1=confusionMatrix(allpredictedCV,y1)$overall[1];Conf1 
+```
+
+```{r}
+qda.model$finalModel
+qda.model$coefnames
+
+Model = c("Single decision tree","QDA-1","QDA-2","QDA-3")
+Accuracy  = c(max(fit_tree$results$Accuracy),qda.model$results$Accuracy,
+                        qda.model2$results$Accuracy,qda.model3$results$Accuracy)
+Kappa  = c(max(fit_tree$results$Kappa),qda.model$results$Kappa,
+                        qda.model2$results$Kappa,qda.model3$results$Kappa)
+
+gf_col(Accuracy  ~Model ) 
+gf_col(Kappa  ~Model ) 
+
+library(pROC)
+
+pp <- predict(fit_tree$finalModel,validdata,s=03, type = "prob")[,1]
+  #predict(fit_tree, diabetes_2,s=0.03, type = "prob")
+pp1 <- predict(qda.model, validdata, type = "prob") 
+pp2 <- predict(qda.model2, validdata, type = 'prob') 
+pp3 <- predict(qda.model3, validdata, type = 'prob') 
+
+myroc = roc(response=diab_0[groupj,]$Outcome, predictor=pp); auc(myroc)
+myroc1 = roc(response=diab_0[groupj,]$Outcome, predictor=pp1$`0`); auc(myroc1)
+myroc2 = roc(response=diab_0[groupj,]$Outcome, predictor=pp2$`0`); auc(myroc2)
+myroc3 = roc(response=diab_0[groupj,]$Outcome, predictor=pp3$`0`); auc(myroc3)
+
+plot.roc(myroc)
+plot.roc(myroc1, add=T, col="red", lty=2)
+#plot.roc(myroc2, add=T, col="blue", lty=2)
+#plot.roc(myroc3, add=T, col="yellow", lty=2)
+
+legend("bottomright", legend=c("Single decision tree", "QDA"),lty=c(1,2), col=c("black","red"))
+
+```
+
+
+
+
+
